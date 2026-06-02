@@ -20,16 +20,26 @@ movie_mapper = model["movie_mapper"]
 
 
 def get_recommendationsByUser(user_id):
-    
+
     if user_id not in user_mapper:
-        return {"error": "Usuário sem avaliações"}
-    
+        ja_assistidos = RatingRepository.getWatchedMovieIds(user_id)
+        top = (
+            df_ratings[
+                (~df_ratings["movieId"].isin(ja_assistidos)) &
+                (df_ratings["nota"] >= 4.0)
+            ]
+            .groupby("movieId")["nota"]
+            .mean()
+            .sort_values(ascending=False)
+        )
+        return {"recommended_movie_ids": top.index.tolist()}
+
     user_ind = user_mapper[user_id]
-    user_vec = X[user_ind]  # era X[user_id], corrigido para X[user_ind]
-    
+    user_vec = X[user_ind]
+
     neighbours = knn_user.kneighbors(user_vec, return_distance=False).flatten()
     usuarios_similares = [user_inv_mapper[n] for n in neighbours if n != user_ind]
-    
+
     ja_assistidos = RatingRepository.getWatchedMovieIds(user_id)
 
     candidatos = (
@@ -41,14 +51,15 @@ def get_recommendationsByUser(user_id):
         .groupby("movieId")["nota"]
         .mean()
         .sort_values(ascending=False)
-        .head(20)
     )
 
     return {"recommended_movie_ids": candidatos.index.tolist()}
 
 
-def get_recommendationByFilm(movie_id):
 
+import random
+
+def get_recommendationByFilm(movie_id):
     movie_id = int(movie_id)
     if movie_id not in movie_mapper:
         return {"error": "Filme não encontrado"}
@@ -56,10 +67,20 @@ def get_recommendationByFilm(movie_id):
     movie_ind = movie_mapper[movie_id]
     movie_vec = X.T[movie_ind]
 
+    # Busca múltiplos vizinhos similares
     neighbours = knn_item.kneighbors(movie_vec, return_distance=False).flatten()
     similar_ids = [
         movie_inv_mapper[n] for n in neighbours if n != movie_ind
-    ][:10]
-    movies = MovieRepository.getMoviesByIds(similar_ids)
+    ]
 
+    # Embaralha a lista
+    random.shuffle(similar_ids)
+    
+    # Pega apenas 1 (aleatório)
+    similar_ids = similar_ids[:1]
+    
+    if not similar_ids:
+        return {"error": "Nenhuma recomendação disponível"}
+    
+    movies = MovieRepository.getMoviesByIds(similar_ids)
     return {"recommended_movie_ids": movies}
