@@ -1,19 +1,119 @@
 from flask import Flask, jsonify, request
+from email.message import EmailMessage
 from Model.User import User
 from Repository.UserRepository import UserRepository
 from Repository.RatingRepository import RatingRepository
 from Repository.MovieRepository import MovieRepository
 from Service.RecommendationService import get_recommendationByFilm, get_recommendationsByUser
 from jose import jwt
+from dotenv import load_dotenv
 import datetime
 import os
+import smtplib
 
+load_dotenv()
 app = Flask(__name__)
 SECRET_KEY = os.environ.get("JWT_SECRET", "dev_secret")
+
+def generate_reset_token(email: str) -> str:
+    payload = {
+        "reset_password": email,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+
+def verify_reset_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        return payload.get("reset_password")
+    except Exception:
+        return None
+
+
+def send_reset_email(recipient: str, reset_url: str):
+    smtp_server = os.environ.get("MAIL_SERVER")
+    smtp_port = int(os.environ.get("MAIL_PORT", 587))
+    smtp_username = os.environ.get("MAIL_USERNAME")
+    smtp_password = os.environ.get("MAIL_PASSWORD")
+    mail_sender = os.environ.get("MAIL_DEFAULT_SENDER", smtp_username)
+    use_ssl = os.environ.get("MAIL_USE_SSL", "false").lower() in ("1", "true", "yes")
+    use_tls = os.environ.get("MAIL_USE_TLS", "true").lower() in ("1", "true", "yes")
+
+    if not smtp_server or not smtp_username or not smtp_password or not mail_sender:
+        raise RuntimeError("Configuração SMTP incompleta. Verifique MAIL_SERVER, MAIL_PORT, MAIL_USERNAME, MAIL_PASSWORD e MAIL_DEFAULT_SENDER.")
+
+    message = EmailMessage()
+    message["Subject"] = "Redefinição de senha"
+    message["From"] = mail_sender
+    message["To"] = recipient
+    message.set_content(
+        f"Para redefinir sua senha, acesse o link:\n{reset_url}\n\nSe você não solicitou essa alteração, ignore esta mensagem."
+    )
+
+    if use_ssl:
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+    else:
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        if use_tls:
+            server.starttls()
+
+    server.login(smtp_username, smtp_password)
+    server.send_message(message)
+    server.quit()
+
 
 @app.route('/')
 def index():
     return "Minha API Flask"
+
+
+
+
+@app.route('/forgot-password', methods=['POST'])
+def forgot_password():
+    body = request.get_json() or {}
+    email = body.get('email')
+
+    if not email:
+        return jsonify({"error": "O campo 'email' é obrigatório."}), 400
+
+    user = UserRepository.findByEmail(email)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+
+    token = generate_reset_token(email)
+    base_url = os.environ.get('APP_BASE_URL', request.host_url.rstrip('/'))
+    reset_url = f"{base_url}/reset-password/{token}"
+
+    try:
+        send_reset_email(email, reset_url)
+    except Exception as err:
+        return jsonify({"error": f"Falha ao enviar email: {str(err)}"}), 500
+
+    return jsonify({
+        "message": "Email de redefinição enviado com sucesso.",
+        "email": email
+    }), 200
+
+
+@app.route('/reset-password/<token>', methods=['POST'])
+def reset_password(token):
+    email = verify_reset_token(token)
+    if not email:
+        return jsonify({"error": "Token inválido ou expirado."}), 400
+
+    body = request.get_json() or {}
+    new_password = body.get('password')
+    if not new_password:
+        return jsonify({"error": "O campo 'password' é obrigatório."}), 400
+
+    user = UserRepository.findByEmail(email)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+
+    UserRepository.updatePassword(email, new_password)
+    return jsonify({"message": "Senha atualizada com sucesso."}), 200
 @app.route('/auth/register', methods=['POST'])
 def createUser():
     body = request.get_json()

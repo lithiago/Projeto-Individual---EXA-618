@@ -25,3 +25,9 @@ class UserRepository:
     def create(user: User):
         result = collection.insert_one({"name": user.name, "email": user.email, "password": user.password})
         print("Inserted ID:", result.inserted_id)
+        return result.inserted_id
+
+    @staticmethod
+    def updatePassword(email: str, new_password: str):
+        result = collection.update_one({"email": email}, {"$set": {"password": new_password}})
+        return result.modified_count > 0
