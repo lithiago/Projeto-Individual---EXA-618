@@ -11,7 +11,9 @@ import os
 app = Flask(__name__)
 SECRET_KEY = os.environ.get("JWT_SECRET", "dev_secret")
 
-
+@app.route('/')
+def index():
+    return "Minha API Flask"
 @app.route('/auth/register', methods=['POST'])
 def createUser():
     body = request.get_json()
